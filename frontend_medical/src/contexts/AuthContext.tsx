@@ -43,6 +43,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const response = await authService.login({ username, password });
       localStorage.setItem('accessToken', response.accessToken);
       localStorage.setItem('refreshToken', response.refreshToken);
+      localStorage.setItem('userRoles', JSON.stringify(response.user.roles));
       setState({
         user: response.user,
         accessToken: response.accessToken,

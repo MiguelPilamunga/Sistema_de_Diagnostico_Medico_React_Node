@@ -33,7 +33,9 @@ import {
   ArrowBack,
   Save,
   Edit,
-  Delete
+  Delete,
+  Add,
+  Visibility
 } from '@mui/icons-material';
 import { AnnotationService, Annotation } from '../services/AnnotationService';
 import { FormDetailsService } from '../services/FormDetailsService';
@@ -112,6 +114,7 @@ const MedicalViewer: React.FC = () => {
   
   const [currentTool, setCurrentTool] = useState<string>('move');
   const [showDiagnosticForm, setShowDiagnosticForm] = useState(false);
+  const [showDetailsDialog, setShowDetailsDialog] = useState(false);
   const [annotations, setAnnotations] = useState<Annotation[]>([]);
   const [formDetails, setFormDetails] = useState<FormDetails | null>(null);
   const [loading, setLoading] = useState(false);
@@ -126,13 +129,12 @@ const MedicalViewer: React.FC = () => {
   const [errorMessage, setErrorMessage] = useState('');
 
   const { dziPath, sampleCode, sampleId, description } = (location.state as LocationState) || {};
-
   const initialFormValues: FormDetails = {
     sample_id: sampleId,
     patient_name: '',
-    birth_date: '',
+    birth_date: new Date().toISOString().split('T')[0],
     patient_id: '',
-    procedure_date: '',
+    procedure_date: new Date().toISOString().split('T')[0],
     sample_type: '',
     anatomical_location: '',
     dimensions: '',
@@ -188,7 +190,10 @@ const MedicalViewer: React.FC = () => {
       setLoading(true);
       const formData = {
         ...values,
-        sample_id: sampleId
+        sample_id: sampleId,
+        birth_date: new Date(values.birth_date).toISOString(),
+        procedure_date: new Date(values.procedure_date).toISOString(),
+        ki67_index: parseFloat((values.ki67_index ?? 0).toString())
       };
       
       const savedForm = await FormDetailsService.createFormDetails(formData);
@@ -196,6 +201,8 @@ const MedicalViewer: React.FC = () => {
       setShowDiagnosticForm(false);
       setSuccessMessage('Diagnóstico guardado exitosamente');
       setShowSuccessDialog(true);
+      
+      await loadFormDetails();
     } catch (error: any) {
       console.error('Error al guardar el diagnóstico:', error);
       setErrorMessage(error.response?.data?.message || 'Error al guardar el diagnóstico');
@@ -314,6 +321,16 @@ const MedicalViewer: React.FC = () => {
       setLoading(false);
     }
   };
+
+  const canEditDiagnosis = useCallback(() => {
+    const userRoles = JSON.parse(localStorage.getItem('userRoles') || '[]');
+  
+    console.log('User roles:', userRoles);
+    return userRoles.some((role: any) => 
+      ['ADMIN', 'DOCTOR'].includes(role.name)
+    );
+  }, []);
+
   useEffect(() => {
     if (!dziPath || !sampleId) return;
 
@@ -446,13 +463,6 @@ const MedicalViewer: React.FC = () => {
     }
   };
 
-  const canEditDiagnosis = useCallback(() => {
-    const userRoles = JSON.parse(localStorage.getItem('userRoles') || '[]');
-    return userRoles.some((role: string) => 
-      ['ADMIN', 'DOCTOR'].includes(role)
-    );
-  }, []);
-
   return (
     <Box sx={{ height: '100vh', display: 'flex', flexDirection: 'column' }}>
       <AppBar position="static" color="default">
@@ -516,11 +526,7 @@ const MedicalViewer: React.FC = () => {
           }}>
             <div 
               id="openseadragon-viewer" 
-              style={{ 
-                width: '100%', 
-                height: '100%',
-                outline: 'none'
-              }} 
+              style={{ width: '100%', height: '100%', outline: 'none' }} 
             />
             {loading && (
               <Box sx={{
@@ -564,19 +570,28 @@ const MedicalViewer: React.FC = () => {
         </Grid>
       </Grid>
 
-      <Button
-        sx={{
-          position: 'absolute',
-          bottom: 16,
-          right: 16
-        }}
-        variant="contained"
-        color="primary"
-        onClick={() => setShowDiagnosticForm(true)}
-        disabled={!canEditDiagnosis()}
-      >
-        {formDetails ? 'Editar Diagnóstico' : 'Agregar Diagnóstico'}
-      </Button>
+      <Box sx={{ position: 'absolute', bottom: 16, right: 16, display: 'flex', gap: 2 }}>
+        {formDetails && (
+          <Button
+            variant="outlined"
+            color="primary"
+            onClick={() => setShowDetailsDialog(true)}
+            startIcon={<Visibility />}
+          >
+            Ver Diagnóstico
+          </Button>
+        )}
+        {canEditDiagnosis() && (
+          <Button
+            variant="contained"
+            color="primary"
+            onClick={() => setShowDiagnosticForm(true)}
+            startIcon={formDetails ? <Edit /> : <Add />}
+          >
+            {formDetails ? 'Editar Diagnóstico' : 'Agregar Diagnóstico'}
+          </Button>
+        )}
+      </Box>
 
       <Dialog 
         open={showDiagnosticForm} 
@@ -597,7 +612,175 @@ const MedicalViewer: React.FC = () => {
             >
               {({ isSubmitting, errors, touched }) => (
                 <Form>
-                  {/* Aquí va todo el contenido del formulario que ya tenías */}
+                  <Grid container spacing={2}>
+                    <Grid item xs={6}>
+                      <Typography variant="subtitle2">Nombre Completo</Typography>
+                      <Field
+                        name="patient_name"
+                        as="input"
+                        className="w-full p-2 border rounded"
+                      />
+                      <ErrorMessage name="patient_name" component="div" className="text-red-500" />
+                    </Grid>
+
+                    <Grid item xs={6}>
+                      <Typography variant="subtitle2">Fecha de Nacimiento</Typography>
+                      <Field
+                        name="birth_date"
+                        type="date"
+                        className="w-full p-2 border rounded"
+                      />
+                      <ErrorMessage name="birth_date" component="div" className="text-red-500" />
+                    </Grid>
+
+                    <Grid item xs={6}>
+                      <Typography variant="subtitle2">ID del Paciente</Typography>
+                      <Field
+                        name="patient_id"
+                        as="input"
+                        className="w-full p-2 border rounded"
+                      />
+                      <ErrorMessage name="patient_id" component="div" className="text-red-500" />
+                    </Grid>
+
+                    <Grid item xs={6}>
+                      <Typography variant="subtitle2">Fecha del Procedimiento</Typography>
+                      <Field
+                        name="procedure_date"
+                        type="date"
+                        className="w-full p-2 border rounded"
+                      />
+                      <ErrorMessage name="procedure_date" component="div" className="text-red-500" />
+                    </Grid>
+
+                    <Grid item xs={6}>
+                      <Typography variant="subtitle2">Tipo de Muestra</Typography>
+                      <Field
+                        name="sample_type"
+                        as="select"
+                        className="w-full p-2 border rounded"
+                      >
+                        <option value="">Seleccione el tipo de muestra</option>
+                        <option value="Biopsia">Biopsia</option>
+                        <option value="Punción">Punción</option>
+                        <option value="Citología">Citología</option>
+                      </Field>
+                      <ErrorMessage name="sample_type" component="div" className="text-red-500" />
+                    </Grid>
+
+                    <Grid item xs={6}>
+                      <Typography variant="subtitle2">Localización Anatómica</Typography>
+                      <Field
+                        name="anatomical_location"
+                        as="input"
+                        className="w-full p-2 border rounded"
+                      />
+                      <ErrorMessage name="anatomical_location" component="div" className="text-red-500" />
+                    </Grid>
+
+                    <Grid item xs={6}>
+                      <Typography variant="subtitle2">Dimensiones</Typography>
+                      <Field
+                        name="dimensions"
+                        as="input"
+                        className="w-full p-2 border rounded"
+                        placeholder="Ej: 2x3cm"
+                      />
+                      <ErrorMessage name="dimensions" component="div" className="text-red-500" />
+                    </Grid>
+
+                    <Grid item xs={6}>
+                      <Typography variant="subtitle2">Textura</Typography>
+                      <Field
+                        name="texture"
+                        as="input"
+                        className="w-full p-2 border rounded"
+                      />
+                      <ErrorMessage name="texture" component="div" className="text-red-500" />
+                    </Grid>
+
+                    <Grid item xs={6}>
+                      <Typography variant="subtitle2">Tipo de Célula</Typography>
+                      <Field
+                        name="cell_type"
+                        as="select"
+                        className="w-full p-2 border rounded"
+                      >
+                        <option value="">Seleccione el tipo de célula</option>
+                        <option value="Escamoso">Escamoso</option>
+                        <option value="Glandular">Glandular</option>
+                        <option value="Columnar">Columnar</option>
+                        <option value="Cuboidal">Cuboidal</option>
+                      </Field>
+                      <ErrorMessage name="cell_type" component="div" className="text-red-500" />
+                    </Grid>
+
+                    <Grid item xs={6}>
+                      <Typography variant="subtitle2">Índice Ki-67 (%)</Typography>
+                      <Field
+                        name="ki67_index"
+                        type="number"
+                        className="w-full p-2 border rounded"
+                        min="0"
+                        max="100"
+                        step="0.1"
+                      />
+                      <ErrorMessage name="ki67_index" component="div" className="text-red-500" />
+                    </Grid>
+
+                    <Grid item xs={6}>
+                      <Typography variant="subtitle2">Estado HER2</Typography>
+                      <Field
+                        name="her2_status"
+                        as="select"
+                        className="w-full p-2 border rounded"
+                      >
+                        <option value="">Seleccione el estado HER2</option>
+                        <option value="Positivo">Positivo</option>
+                        <option value="Negativo">Negativo</option>
+                        <option value="Inconcluso">Inconcluso</option>
+                      </Field>
+                      <ErrorMessage name="her2_status" component="div" className="text-red-500" />
+                    </Grid>
+
+                    <Grid item xs={6}>
+                      <Typography variant="subtitle2">Tipo BRCA</Typography>
+                      <Field
+                        name="brca_type"
+                        as="select"
+                        className="w-full p-2 border rounded"
+                      >
+                        <option value="">Seleccione el tipo BRCA</option>
+                        <option value="BRCA1">BRCA1</option>
+                        <option value="BRCA2">BRCA2</option>
+                        <option value="Ninguno">Ninguno</option>
+                      </Field>
+                      <ErrorMessage name="brca_type" component="div" className="text-red-500" />
+                    </Grid>
+
+                    <Grid item xs={6}>
+                      <Typography variant="subtitle2">Clasificación TNM</Typography>
+                      <Field
+                        name="tnm_classification"
+                        as="input"
+                        className="w-full p-2 border rounded"
+                        placeholder="Ej: T2N0M0"
+                      />
+                      <ErrorMessage name="tnm_classification" component="div" className="text-red-500" />
+                      </Grid>
+
+                    <Grid item xs={12}>
+                      <Typography variant="subtitle2">Recomendaciones</Typography>
+                      <Field
+                        name="recommendations"
+                        as="textarea"
+                        className="w-full p-2 border rounded"
+                        rows={4}
+                      />
+                      <ErrorMessage name="recommendations" component="div" className="text-red-500" />
+                    </Grid>
+                  </Grid>
+
                   <Box sx={{ mt: 2, display: 'flex', justifyContent: 'flex-end' }}>
                     <Button 
                       type="button" 
@@ -621,6 +804,82 @@ const MedicalViewer: React.FC = () => {
             </Formik>
           </Box>
         </DialogContent>
+      </Dialog>
+
+      <Dialog 
+        open={showDetailsDialog} 
+        onClose={() => setShowDetailsDialog(false)}
+        fullWidth 
+        maxWidth="md"
+      >
+        <DialogTitle>Detalles del Diagnóstico</DialogTitle>
+        <DialogContent>
+          {formDetails && (
+            <Box sx={{ p: 2 }}>
+              <Grid container spacing={2}>
+                <Grid item xs={6}>
+                  <Typography variant="subtitle2">Nombre del Paciente</Typography>
+                  <Typography>{formDetails.patient_name}</Typography>
+                </Grid>
+                <Grid item xs={6}>
+                  <Typography variant="subtitle2">Fecha de Nacimiento</Typography>
+                  <Typography>{new Date(formDetails.birth_date).toLocaleDateString()}</Typography>
+                </Grid>
+                <Grid item xs={6}>
+                  <Typography variant="subtitle2">ID del Paciente</Typography>
+                  <Typography>{formDetails.patient_id}</Typography>
+                </Grid>
+                <Grid item xs={6}>
+                  <Typography variant="subtitle2">Fecha del Procedimiento</Typography>
+                  <Typography>{new Date(formDetails.procedure_date).toLocaleDateString()}</Typography>
+                </Grid>
+                <Grid item xs={6}>
+                  <Typography variant="subtitle2">Tipo de Muestra</Typography>
+                  <Typography>{formDetails.sample_type}</Typography>
+                </Grid>
+                <Grid item xs={6}>
+                  <Typography variant="subtitle2">Localización Anatómica</Typography>
+                  <Typography>{formDetails.anatomical_location}</Typography>
+                </Grid>
+                <Grid item xs={6}>
+                  <Typography variant="subtitle2">Dimensiones</Typography>
+                  <Typography>{formDetails.dimensions}</Typography>
+                </Grid>
+                <Grid item xs={6}>
+                  <Typography variant="subtitle2">Textura</Typography>
+                  <Typography>{formDetails.texture}</Typography>
+                </Grid>
+                <Grid item xs={6}>
+                  <Typography variant="subtitle2">Tipo de Célula</Typography>
+                  <Typography>{formDetails.cell_type}</Typography>
+                </Grid>
+                <Grid item xs={6}>
+                  <Typography variant="subtitle2">Índice Ki-67</Typography>
+                  <Typography>{formDetails.ki67_index}%</Typography>
+                </Grid>
+                <Grid item xs={6}>
+                  <Typography variant="subtitle2">Estado HER2</Typography>
+                  <Typography>{formDetails.her2_status}</Typography>
+                </Grid>
+                <Grid item xs={6}>
+                  <Typography variant="subtitle2">Tipo BRCA</Typography>
+                  <Typography>{formDetails.brca_type}</Typography>
+                </Grid>
+                <Grid item xs={6}>
+                  <Typography variant="subtitle2">Clasificación TNM</Typography>
+                  <Typography>{formDetails.tnm_classification}</Typography>
+                </Grid>
+                <Grid item xs={12}>
+                  <Typography variant="subtitle2">Recomendaciones</Typography>
+                  <Typography>{formDetails.recommendations}</Typography>
+                </Grid>
+              </Grid>
+            </Box>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setShowDetailsDialog(false)}>Cerrar</Button>
+        </DialogActions>
       </Dialog>
 
       <Dialog open={showSuccessDialog} onClose={() => setShowSuccessDialog(false)}>
