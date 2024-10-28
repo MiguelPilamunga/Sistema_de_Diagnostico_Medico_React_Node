@@ -1,0 +1,95 @@
+services:
+  db:
+    image: mysql:8.0
+    restart: always
+    ports:
+      - "${DB_PORT}:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./backend_new_version/base_query.sql:/docker-entrypoint-initdb.d/base_query.sql
+    environment:
+      - MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD}
+      - MYSQL_DATABASE=${MYSQL_DATABASE}
+      - MYSQL_USER=${MYSQL_USER}
+      - MYSQL_PASSWORD=${MYSQL_PASSWORD}
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u$$MYSQL_USER", "-p$$MYSQL_PASSWORD"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - app-network
+
+  backend:
+    build: 
+      context: ./backend_new_version
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./backend_new_version/src:/app/src:rw
+      - ./backend_new_version/package.json:/app/package.json:rw
+      - node_modules_backend:/app/node_modules
+    environment:
+      - NODE_ENV=${NODE_ENV}
+      - PORT=3000
+      - DB_HOST=db
+      - DB_PORT=${DB_PORT}
+      - DB_USER=${DB_USER}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - DB_NAME=${DB_NAME}
+      - JWT_SECRET=${JWT_SECRET}
+      - JWT_EXPIRATION=${JWT_EXPIRATION}
+      - JWT_REFRESH_SECRET=${JWT_REFRESH_SECRET}
+      - JWT_EXPIRES_IN=${JWT_EXPIRES_IN}
+      - JWT_REFRESH_EXPIRES_IN=${JWT_REFRESH_EXPIRES_IN}
+      # Permitir múltiples orígenes para CORS
+      - CORS_ORIGIN=http://localhost:3001,http://127.0.0.1:3001,http://172.19.0.4:3002
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - app-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  frontend:
+    build: 
+      context: ./frontend_medical
+      dockerfile: Dockerfile!
+    ports:
+      - "3001:3001"
+    volumes:
+      - ./frontend_medical/src:/app/src:rw
+      - ./frontend_medical/public:/app/public:rw
+      - ./frontend_medical/package.json:/app/package.json:rw
+      - node_modules_frontend:/app/node_modules
+    environment:
+      - NODE_ENV=development
+      - PORT=3001
+      # Usar variables de entorno más específicas
+      - VITE_BACKEND_URL=http://localhost:3000
+      - VITE_API_URL=http://localhost:3000/api
+    restart: unless-stopped
+    depends_on:
+      - backend
+    networks:
+      - app-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3001"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+networks:
+  app-network:
+    driver: bridge
+
+volumes:
+  mysql_data:
+  node_modules_backend:
+  node_modules_frontend:
