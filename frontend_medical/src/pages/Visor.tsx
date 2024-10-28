@@ -29,8 +29,7 @@ import {
   Timeline, 
   ArrowBack 
 } from '@mui/icons-material';
-import { AnnotationList } from './../components/Annotations/AnnotationList';
-import { AnnotationService } from '../services/AnnotationService';
+import { AnnotationService, Annotation } from '../services/AnnotationService';
 import { FormDetailsService } from '../services/FormDetailsService';
 
 interface LocationState {
@@ -45,6 +44,7 @@ interface AnnotationViewer {
   setDrawingEnabled: (enabled: boolean) => void;
   setTheme: (theme: any) => void;
   on: (event: string, callback: (annotation: any) => void) => void;
+  addAnnotation: (annotation: any) => void;
   destroy?: () => void;
 }
 
@@ -56,7 +56,7 @@ interface FormDetails {
   procedure_date: string;
   sample_type: string;
   anatomical_location: string;
-  dimensions: string;
+  dimensions?: string;
   texture: string;
   cell_type: string;
   ki67_index: number;
@@ -77,7 +77,6 @@ const validationSchema = Yup.object().shape({
   texture: Yup.string().required('Textura es requerida'),
   cell_type: Yup.string().required('Tipo de célula es requerido'),
   ki67_index: Yup.number()
-    .integer()
     .min(0, 'El índice debe ser mayor o igual a 0')
     .max(100, 'El índice debe ser menor o igual a 100')
     .required('Índice Ki-67 es requerido'),
@@ -92,12 +91,15 @@ const MedicalViewer: React.FC = () => {
   const navigate = useNavigate();
   const viewerRef = useRef<OpenSeadragon.Viewer | null>(null);
   const annoRef = useRef<AnnotationViewer | null>(null);
+  
   const [currentTool, setCurrentTool] = useState<string>('move');
   const [showDiagnosticForm, setShowDiagnosticForm] = useState(false);
-  const [annotations, setAnnotations] = useState<any[]>([]);
+  const [annotations, setAnnotations] = useState<Annotation[]>([]);
+  const [formDetails, setFormDetails] = useState<FormDetails | null>(null);
+  const [successMessage, setSuccessMessage] = useState<string>('');
+  const [errorMessage, setErrorMessage] = useState<string>('');
   const [showSuccessDialog, setShowSuccessDialog] = useState(false);
   const [showErrorDialog, setShowErrorDialog] = useState(false);
-  const [errorMessage, setErrorMessage] = useState('');
 
   const { dziPath, sampleCode, sampleId, description } = (location.state as LocationState) || {};
 
@@ -110,13 +112,53 @@ const MedicalViewer: React.FC = () => {
     sample_type: '',
     anatomical_location: '',
     dimensions: '',
-    texture: '',
+    texture: '', // Ensure texture is always a string
     cell_type: '',
     ki67_index: 0,
     her2_status: '',
     brca_type: '',
     tnm_classification: '',
     recommendations: '',
+  };
+
+  // Función para convertir formato de anotación
+  const convertAnnotationFormat = (annotation: any): Partial<Annotation> => {
+    const bounds = annotation.target.selector.value;
+    const coordinates = bounds.split(',').map(parseFloat);
+
+    return {
+      annotation_data: {
+        type: annotation.target.selector.type,
+        properties: {
+          color: 'red'
+        }
+      },
+      x: coordinates[0],
+      y: coordinates[1],
+      width: coordinates[2],
+      height: coordinates[3],
+      type: annotation.target.selector.type === 'FragmentSelector' ? 'rectangle' : 'polygon',
+      text: annotation.body?.[0]?.value || 'Área de interés'
+    };
+  };
+
+  // Convertir de formato backend a formato Annotorious
+  const convertToAnnotoriousFormat = (annotation: Annotation) => {
+    return {
+      "@context": "http://www.w3.org/ns/anno.jsonld",
+      "type": "Annotation",
+      "body": [{
+        "value": annotation.text,
+        "purpose": "commenting"
+      }],
+      "target": {
+        "selector": {
+          "type": annotation.type === 'rectangle' ? 'FragmentSelector' : 'SvgSelector',
+          "value": `${annotation.x},${annotation.y},${annotation.width},${annotation.height}`
+        }
+      },
+      "id": annotation.id
+    };
   };
 
   useEffect(() => {
@@ -160,55 +202,136 @@ const MedicalViewer: React.FC = () => {
           allowEmpty: true,
           disableSelect: false,
           disableEditor: false,
-          drawOnSingleClick: false
-        });
-
-        anno.setTheme({
-          selection: {
-            strokeWidth: 2,
-            stroke: '#ff0000',
-            fill: 'rgba(255, 0, 0, 0.3)'
-          },
-          polygon: {
-            strokeWidth: 2,
-            stroke: '#ff0000',
-            fill: 'rgba(255, 0, 0, 0.3)',
-            handleRadius: 6,
-            handleFill: '#ffffff',
-            handleStroke: '#ff0000'
+          drawOnSingleClick: false,
+          style: {
+            selection: {
+              strokeWidth: 2,
+              stroke: '#ff0000',
+              fill: 'rgba(255, 0, 0, 0.3)'
+            },
+            polygon: {
+              strokeWidth: 2,
+              stroke: '#ff0000',
+              fill: 'rgba(255, 0, 0, 0.3)', 
+              handleRadius: 6,
+              handleFill: '#ffffff',
+              handleStroke: '#ff0000'
+            }
           }
         });
-
-        anno.on('createAnnotation', (annotation: any) => {
-          console.log('Anotación creada:', annotation);
+       
+        anno.setDrawingTool('rect');
+       
+        anno.on('createAnnotation', async (annotation: any) => {
+          try {
+            const annotationData = convertAnnotationFormat(annotation);
+            const savedAnnotation = await AnnotationService.createAnnotation(sampleId, annotationData);
+            setAnnotations(prevAnnotations => [...prevAnnotations, savedAnnotation]);
+            setSuccessMessage('Anotación guardada correctamente');
+            setShowSuccessDialog(true);
+          } catch (error) {
+            console.error('Error al guardar la anotación:', error);
+            setErrorMessage('Error al guardar la anotación');
+            setShowErrorDialog(true);
+          }
         });
-
-        anno.on('updateAnnotation', (annotation: any, previous: any) => {
-          console.log('Anotación actualizada:', annotation);
+       
+        anno.on('updateAnnotation', async (annotation: any, previous: any) => {
+          try {
+            const annotationData = convertAnnotationFormat(annotation);
+            const updatedAnnotation = await AnnotationService.updateAnnotation(
+              sampleId,
+              previous.id,
+              annotationData
+            );
+            setAnnotations(prevAnnotations =>
+              prevAnnotations.map(anno => 
+                anno.id === previous.id ? updatedAnnotation : anno
+              )
+            );
+            setSuccessMessage('Anotación actualizada correctamente');
+            setShowSuccessDialog(true);
+          } catch (error) {
+            console.error('Error al actualizar la anotación:', error);
+            setErrorMessage('Error al actualizar la anotación');
+            setShowErrorDialog(true);
+          }
         });
-
-        anno.on('deleteAnnotation', (annotation: any) => {
-          console.log('Anotación eliminada:', annotation);
+       
+        anno.on('deleteAnnotation', async (annotation: any) => {
+          try {
+            await AnnotationService.deleteAnnotation(sampleId, annotation.id);
+            setAnnotations(prevAnnotations =>
+              prevAnnotations.filter(anno => anno.id !== annotation.id)
+            );
+            setSuccessMessage('Anotación eliminada correctamente');
+            setShowSuccessDialog(true);
+          } catch (error) {
+            console.error('Error al eliminar la anotación:', error);
+            setErrorMessage('Error al eliminar la anotación');
+            setShowErrorDialog(true);
+          }
         });
-
+       
+        const loadExistingAnnotations = async () => {
+          try {
+            const existingAnnotations = await AnnotationService.getAnnotations(sampleId);
+            setAnnotations(existingAnnotations);
+       
+            existingAnnotations.forEach((annotation: Annotation) => {
+              const annotoriousFormat = {
+                "@context": "http://www.w3.org/ns/anno.jsonld",
+                "type": "Annotation",
+                "body": [{
+                  "value": annotation.text,
+                  "purpose": "commenting"
+                }],
+                "target": {
+                  "selector": {
+                    "type": annotation.type === 'rectangle' ? 'FragmentSelector' : 'SvgSelector',
+                    "value": `${annotation.x},${annotation.y},${annotation.width},${annotation.height}`
+                  }
+                },
+                "id": annotation.id
+              };
+              
+              anno.addAnnotation(annotoriousFormat);
+            });
+          } catch (error) {
+            console.error('Error al cargar las anotaciones:', error);
+            setErrorMessage('Error al cargar las anotaciones existentes');
+            setShowErrorDialog(true);
+          }
+        };
+       
+        loadExistingAnnotations();
         annoRef.current = anno;
-      });
+       });
+
     };
 
     initViewer();
 
-    const fetchAnnotations = async () => {
+    // Cargar anotaciones existentes
+    const loadExistingAnnotations = async () => {
       try {
-        const fetchedAnnotations = await AnnotationService.getAnnotations(sampleId);
-        setAnnotations(fetchedAnnotations);
+        const existingAnnotations = await AnnotationService.getAnnotations(sampleId);
+        setAnnotations(existingAnnotations);
+        
+        if (annoRef.current) {
+          existingAnnotations.forEach((annotation: Annotation) => {
+            const annotoriousFormat = convertToAnnotoriousFormat(annotation);
+            annoRef.current?.addAnnotation(annotoriousFormat);
+          });
+        }
       } catch (error) {
-        console.error('Error fetching annotations:', error);
-        setErrorMessage('Error al cargar las anotaciones');
+        console.error('Error al cargar las anotaciones:', error);
+        setErrorMessage('Error al cargar las anotaciones existentes');
         setShowErrorDialog(true);
       }
     };
 
-    fetchAnnotations();
+    loadExistingAnnotations();
 
     return () => {
       if (viewerRef.current) {
@@ -219,6 +342,7 @@ const MedicalViewer: React.FC = () => {
       }
     };
   }, [dziPath, sampleId]);
+
   const handleToolChange = (tool: string) => {
     setCurrentTool(tool);
     
@@ -266,29 +390,6 @@ const MedicalViewer: React.FC = () => {
     }
   };
 
-  const handleDeleteAnnotation = async (annotationId: number) => {
-    try {
-      await AnnotationService.deleteAnnotation(sampleId, annotationId);
-      const updatedAnnotations = annotations.filter(anno => anno.id !== annotationId);
-      setAnnotations(updatedAnnotations);
-    } catch (error) {
-      console.error('Error deleting annotation:', error);
-      setErrorMessage('Error al eliminar la anotación');
-      setShowErrorDialog(true);
-    }
-  };
-
-  const handleFormSubmit = async (values: FormDetails) => {
-    try {
-      await FormDetailsService.createFormDetails(values);
-      setShowSuccessDialog(true);
-      setShowDiagnosticForm(false);
-    } catch (error) {
-      console.error('Error creating form details:', error);
-      setErrorMessage('Error al guardar los detalles del formulario');
-      setShowErrorDialog(true);
-    }
-  };
 
   return (
     <Box sx={{ height: '100vh', display: 'flex', flexDirection: 'column' }}>
@@ -361,28 +462,34 @@ const MedicalViewer: React.FC = () => {
             />
           </Box>
         </Grid>
-        <Grid item xs={3}>
-          <AnnotationList
-            annotations={annotations}
-            onDelete={handleDeleteAnnotation}
-          />
+        <Grid item xs={3} sx={{ p: 2, overflowY: 'auto' }}>
+          <Typography variant="h6" gutterBottom>
+            Anotaciones
+          </Typography>
+          {annotations.map((annotation) => (
+            <Box
+              key={annotation.id}
+              sx={{
+                p: 2,
+                mb: 1,
+                border: '1px solid #ddd',
+                borderRadius: 1,
+                backgroundColor: '#f5f5f5'
+              }}
+            >
+              <Typography variant="subtitle2">
+                {annotation.text}
+              </Typography>
+              <Typography variant="caption" display="block">
+                Creado por: {annotation.user.fullname}
+              </Typography>
+              <Typography variant="caption" display="block">
+                Fecha: {new Date(annotation.created_at).toLocaleString()}
+              </Typography>
+            </Box>
+          ))}
         </Grid>
       </Grid>
-
-      <Typography
-        sx={{
-          position: 'absolute',
-          bottom: 16,
-          left: '50%',
-          transform: 'translateX(-50%)',
-          padding: 1,
-          bgcolor: 'rgba(255,255,255,0.9)',
-          borderRadius: 1
-        }}
-        variant="caption"
-      >
-        ID Muestra: {sampleId || 'No disponible'}
-      </Typography>
 
       <Button
         sx={{
@@ -409,7 +516,11 @@ const MedicalViewer: React.FC = () => {
             <Formik
               initialValues={initialFormValues}
               validationSchema={validationSchema}
-              onSubmit={handleFormSubmit}
+              onSubmit={(values, { setSubmitting }) => {
+                console.log(values);
+                setSubmitting(false);
+              }}
+           
             >
               {({ errors, touched }) => (
                 <Form>
@@ -438,6 +549,7 @@ const MedicalViewer: React.FC = () => {
                       <Typography variant="subtitle2">ID del Paciente</Typography>
                       <Field
                         name="patient_id"
+                        as="input"
                         className="w-full p-2 border rounded"
                       />
                       <ErrorMessage name="patient_id" component="div" className="text-red-500" />
@@ -472,6 +584,7 @@ const MedicalViewer: React.FC = () => {
                       <Typography variant="subtitle2">Localización Anatómica</Typography>
                       <Field
                         name="anatomical_location"
+                        as="input"
                         className="w-full p-2 border rounded"
                       />
                       <ErrorMessage name="anatomical_location" component="div" className="text-red-500" />
@@ -481,7 +594,9 @@ const MedicalViewer: React.FC = () => {
                       <Typography variant="subtitle2">Dimensiones</Typography>
                       <Field
                         name="dimensions"
+                        as="input"
                         className="w-full p-2 border rounded"
+                        placeholder="Ej: 2x3cm"
                       />
                       <ErrorMessage name="dimensions" component="div" className="text-red-500" />
                     </Grid>
@@ -490,6 +605,7 @@ const MedicalViewer: React.FC = () => {
                       <Typography variant="subtitle2">Textura</Typography>
                       <Field
                         name="texture"
+                        as="input"
                         className="w-full p-2 border rounded"
                       />
                       <ErrorMessage name="texture" component="div" className="text-red-500" />
@@ -505,16 +621,21 @@ const MedicalViewer: React.FC = () => {
                         <option value="">Seleccione el tipo de célula</option>
                         <option value="Escamoso">Escamoso</option>
                         <option value="Glandular">Glandular</option>
+                        <option value="Columnar">Columnar</option>
+                        <option value="Cuboidal">Cuboidal</option>
                       </Field>
                       <ErrorMessage name="cell_type" component="div" className="text-red-500" />
                     </Grid>
 
                     <Grid item xs={6}>
-                      <Typography variant="subtitle2">Índice Ki-67</Typography>
+                      <Typography variant="subtitle2">Índice Ki-67 (%)</Typography>
                       <Field
                         name="ki67_index"
                         type="number"
                         className="w-full p-2 border rounded"
+                        min="0"
+                        max="100"
+                        step="0.1"
                       />
                       <ErrorMessage name="ki67_index" component="div" className="text-red-500" />
                     </Grid>
@@ -544,6 +665,7 @@ const MedicalViewer: React.FC = () => {
                         <option value="">Seleccione el tipo BRCA</option>
                         <option value="BRCA1">BRCA1</option>
                         <option value="BRCA2">BRCA2</option>
+                        <option value="Ninguno">Ninguno</option>
                       </Field>
                       <ErrorMessage name="brca_type" component="div" className="text-red-500" />
                     </Grid>
@@ -552,7 +674,9 @@ const MedicalViewer: React.FC = () => {
                       <Typography variant="subtitle2">Clasificación TNM</Typography>
                       <Field
                         name="tnm_classification"
+                        as="input"
                         className="w-full p-2 border rounded"
+                        placeholder="Ej: T2N0M0"
                       />
                       <ErrorMessage name="tnm_classification" component="div" className="text-red-500" />
                     </Grid>
@@ -577,7 +701,11 @@ const MedicalViewer: React.FC = () => {
                     >
                       Cancelar
                     </Button>
-                    <Button type="submit" variant="contained" color="primary">
+                    <Button 
+                      type="submit" 
+                      variant="contained" 
+                      color="primary"
+                    >
                       Guardar
                     </Button>
                   </Box>
@@ -589,14 +717,12 @@ const MedicalViewer: React.FC = () => {
       </Dialog>
 
       <Dialog open={showSuccessDialog} onClose={() => setShowSuccessDialog(false)}>
-        <DialogTitle>Guardado Exitoso</DialogTitle>
+        <DialogTitle>Éxito</DialogTitle>
         <DialogContent>
-          <Typography>Los detalles se han guardado correctamente.</Typography>
+          <Typography>{successMessage}</Typography>
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setShowSuccessDialog(false)} color="primary">
-            Aceptar
-          </Button>
+          <Button onClick={() => setShowSuccessDialog(false)}>Aceptar</Button>
         </DialogActions>
       </Dialog>
 
@@ -606,9 +732,7 @@ const MedicalViewer: React.FC = () => {
           <Typography>{errorMessage}</Typography>
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setShowErrorDialog(false)} color="primary">
-            Aceptar
-          </Button>
+          <Button onClick={() => setShowErrorDialog(false)}>Aceptar</Button>
         </DialogActions>
       </Dialog>
     </Box>

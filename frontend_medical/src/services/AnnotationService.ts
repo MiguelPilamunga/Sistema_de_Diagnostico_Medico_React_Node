@@ -29,7 +29,6 @@ export interface Annotation {
 }
 
 export class AnnotationService {
-  // Obtener los encabezados de autenticación
   private static getAuthHeaders() {
     const token = localStorage.getItem('accessToken');
     return {
